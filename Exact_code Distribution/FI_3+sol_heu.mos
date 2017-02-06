@@ -1,0 +1,243 @@
+model "hcon" uses 'mmxprs', 'mmive', 'mmsystem','mmjobs'
+parameters
+	data_file =  'datosStefano2/20/datos20_10.txt'
+!data_file =  'datos20_1.txt' 
+end-parameters 
+declarations 
+  n: integer
+  d: integer
+  it: integer
+end-declarations 
+initializations from data_file 
+  n d it 
+end-initializations 
+declarations
+	I = 1..n !: range  !conjunto de clientes (idéntico al conjunto de plantas)
+    r3,r4,r5,r6,r7: range
+	y: array(I) of mpvar
+    x: array(r5,r6) of mpvar
+	f: array(r3,r4) of mpvar
+	N: dynamic array(1..n*n,1..2) of integer
+	s: array(I,I) of integer
+	C: array(I,I) of real
+	soly: array(I) of real
+	solx: array(r5,r6) of real
+	dd: array(I,I) of integer
+	feastol: real
+	objh: real
+	solh: array(I) of integer
+end-declarations
+initializations from data_file 
+N objh solh C 
+end-initializations
+forall(i,j in I) s(i,j):=0
+forall(i in 1..n*d|exists(N(i,1))) s(N(i,1),N(i,2)):=1
+forall(i in 1..n*d|exists(N(i,1))) s(N(i,2),N(i,1)):=1
+forall(i,j in I|  i<>j and s(i,j)=1 ) do
+create(f(i,j))
+create(f(j,i))
+end-do
+finalize(r3)
+finalize(r4)
+forall(i,j in I|i<j ) do
+create(x(i,j))
+end-do
+finalize(r5)
+finalize(r6)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! modelización
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+forall(i in 1..1, j,l in I | exists(x(i,j)) and exists(x(j,l)) and exists(x(i,l)) and (C(i,j)<=0 or C(j,l)<=0)) x(i,j)+x(j,l)-x(i,l) <= 1 
+forall(i,j in I, l in n..n | exists(x(i,l)) and exists(x(j,l)) and exists(x(i,j)) and (C(i,l)<=0 or C(j,l)<=0)) x(i,l)+x(j,l)-x(i,j) <= 1 
+forall(i,j,l in I | exists(x(i,j)) and exists(x(i,l)) and exists(x(j,l)) and (C(i,j)<=0 or C(i,l)<=0)) x(i,j)+x(i,l)-x(j,l) <= 1 
+
+forall(k in I) y(k)+sum(j in k+1..n) x(k,j) >=1
+forall(k,j in I|j>k) y(k)+x(k,j)<=1
+!V3
+forall(j in I) sum(i in I| exists(f(i,j))) f(i,j) =1-y(j)
+forall(i,j in I| exists(f(i,j))) f(i,j)<=1-y(j)           !redundante con la anterior
+forall(i,j in I|exists(f(i,j)) and exists(x(i,j))) f(i,j)+ f(j,i) <=x(i,j)
+forall(i,j in I|exists(f(i,j))) f(i,j) is_binary 
+!V4
+forall(j in I) sum(i in I|exists(x(i,j)) and s(j,i)=1) x(i,j)+sum(i in I|exists(x(j,i)) and s(i,j)=1) x(j,i)>=1-y(j)
+
+forall(i,j in I|exists(x(i,j))) x(i,j) is_binary
+obj:=sum(i,j in 1..n| exists(x(i,j))) x(i,j)*C(i,j) 
+
+declarations global_ncut: array(1..1) of integer end-declarations 
+declarations global_ncut_disconexion: array(1..1) of integer end-declarations 
+declarations global_ncut_capacidad: array(1..1) of integer end-declarations 
+declarations ncut: integer end-declarations 
+
+function proc_detecta_disconexion:boolean 	
+declarations 
+rr1: range
+cut: array(rr1) of linctr ! Cuts
+cutid: array(rr1) of integer ! Cut type identification
+type: array(rr1) of integer ! Cut constraint type
+!ncut: integer
+end-declarations 
+returned:=false 
+setparam("XPRS_SOLUTIONFILE",0)
+forall(i,j  in I| exists(x(i,j))) solx(i,j):=getsol(x(i,j))
+forall(k  in I) soly(k):=getsol(y(k))
+setparam("XPRS_SOLUTIONFILE",1)
+ncut:=0
+aa:=0.1
+forall(ii in I| sum(j in I| j<ii) solx(j,ii)+sum(j in I| j>ii) solx(ii,j)> 0.1)  do  !forall(k in I| solz(k,k)>aa) do 
+ forall(i,j in I| i<j  and ((i<ii and solx(i,ii)>aa) or (ii<i and solx(ii,i)>aa))  and  ((j<ii and solx(j,ii)>aa) or (ii<j and solx(ii,j)>aa)) ) do
+if (i>ii and solx(i,j)<=aa and solx(ii,i)+ solx(ii,j)-solx(i,j) > 1.1) then
+   returned:=true
+    ncut:=ncut+1
+    global_ncut(1)+=1
+    global_ncut(1)+=1
+    cutid(ncut):= global_ncut(1)
+    type(ncut):= CT_GEQ 
+    cut(ncut):=(-x(ii,i)-x(ii,j)+x(i,j)+1)
+end-if  
+   if  (j<ii and  solx(i,j)<=aa and  solx(i,ii)+  solx(j,ii)-solx(i,j) > 1.1) then
+   returned:=true
+   ncut+=1
+    global_ncut(1)+=1
+    cutid(ncut):= global_ncut(1)
+    type(ncut):= CT_GEQ 	
+    cut(ncut):=   -x(i,ii)-x(j,ii)+x(i,j)+1
+   end-if
+ if  (j>ii and i<ii and  solx(i,j)<=aa  and solx(i,ii)+ solx(ii,j)-solx(i,j)> 1.1) then
+   returned:=true
+   ncut+=1
+    global_ncut(1)+=1
+    cutid(ncut):= global_ncut(1)
+    type(ncut):= CT_GEQ 	
+    cut(ncut):=   -x(i,ii)-x(ii,j)+ x(i,j)+1
+  end-if
+ end-do
+end-do
+
+
+forall(ii in I| soly(ii)> aa) do !sum(j in I| j<ii) solx(j,ii)+sum(j in I| j>ii) solx(ii,j)> 0.1)  do  !forall(k in I| solz(k,k)>aa) do 
+ forall(i,j in I) dd(i,j):=1
+ forall(i in I)   dd(i,i):=0
+ forall(i,j in I| i<j and i<ii and j<ii and  s(j,i)=1 and  solx(i,ii)>aa and  solx(j,ii)>aa ) do
+  dd(i,j):=0 !1-solx(i,j)
+  dd(j,i):=0 !1-solx(i,j)
+ end-do
+forall(j in I| j<ii and  s(ii,j)=1 and solx(j,ii)>aa) do
+  dd(ii,j):=0 !1-solx(i,j)
+  dd(j,ii):=0 !1-solx(i,j)
+end-do
+ forall(i,j,kk in I |j<kk and  i<ii  and solx(i,ii)>aa and j<ii  and solx(j,ii)>aa and kk<ii and solx(kk,ii)>aa  ) 
+ if dd(j,kk) > dd(j,i)+dd(i,kk) then 
+    dd(j,kk):= dd(j,i)+dd(i,kk) 
+    dd(kk,j):= dd(j,i)+dd(i,kk) 
+ end-if
+
+forall(i,j in I |j<ii and  i<ii  and solx(i,ii)>aa and  solx(j,ii)>aa) 
+ if dd(j,ii) > dd(j,i)+dd(i,ii) then 
+    dd(j,ii):= dd(j,i)+dd(i,ii) 
+    dd(ii,j):= dd(j,i)+dd(i,ii) 
+ end-if
+forall(j in I | j<ii and solx(j,ii)>aa) do
+if (dd(ii,j)>0) then
+ if (sum(kk in I |ii<kk) solx(ii,kk)+sum(kk in I |kk<ii and solx(kk,ii)<=aa) solx(kk,ii)-solx(j,ii) < -0.1) then
+   returned:=true
+   ncut+=1
+    global_ncut(1)+=1
+    cutid(ncut):= global_ncut(1)
+    type(ncut):= CT_GEQ 	
+    cut(ncut):=  sum(kk in I | ii<kk ) x(ii,kk)+ sum(kk in I |kk<ii and solx(kk,ii)<=aa) x(kk,ii)-x(j,ii)
+  end-if
+  end-if 
+ end-do
+ end-do
+if (ncut>0) then
+      addcuts(cutid,type,cut)
+end-if
+end-function
+
+function proc_BB_elimina_subtours:boolean   	
+		returned:=false 
+     if(getparam("XPRS_MIPINFEAS") = 0) then	
+        returned:=proc_detecta_disconexion
+           if returned then
+              global_ncut_disconexion(1)+=ncut   
+           end-if 
+     else
+						returned:=proc_detecta_disconexion 
+						if returned then 
+  						global_ncut_disconexion(1)+=ncut   
+						end-if 
+     end-if
+end-function
+
+function fun_optnode:boolean
+dummy:=1 
+   returned:=proc_BB_elimina_subtours
+returned:=false
+end-function
+procedure cb_optnode
+	setcallback(XPRS_CB_OPTNODE, "fun_optnode") 
+end-procedure
+cb_optnode
+procedure fun_preintsol(isheur:boolean,cutoff:real)
+dummy:=1 
+   returned:=false
+	if isheur then 
+     returned:=proc_detecta_disconexion
+     if returned then 
+        rejectintsol
+     end-if
+	end-if
+end-procedure
+procedure cb_preintsol
+	setcallback(XPRS_CB_PREINTSOL, "fun_preintsol") 
+end-procedure
+cb_preintsol
+	
+initialtimeLP:= gettime
+minimize(XPRS_LIN,obj)
+lp:=getobjval
+inittime:=gettime
+
+finaltimeLP:= gettime
+obj_LR:=getobjval
+LP_stat := getparam("XPRS_LPSTATUS")
+
+setparam("XPRS_MAXTIME",-7200)
+setparam("XPRS_CUTSTRATEGY",-1)  
+setparam("XPRS_PRESOLVE",0)
+setparam("XPRS_HEURSTRATEGY",-1)
+setparam("XPRS_HEURSEARCHEFFORT",0)
+setparam("XPRS_HEURSEARCHROOTSELECT",31)
+setparam("XPRS_HEURSEARCHTREESELECT",19)
+
+forall(i,j in I|i<j) x_heur(i,j):=0
+forall(i in I)   y_heur(i):=0
+forall(i,j in I| i<j and solh(i)=solh(j) ) x_heur(i,j):=1
+maxsolh:=max(i in I) solh(i)
+forall(j in 1..maxsolh) do
+forall(i in I) do
+if solh(i)=j then
+imax(j):=i
+end-if
+end-do
+y_heur(imax(j)):=1
+end-do
+
+declarations InitSol: dynamic array(set of mpvar) of real end-declarations
+forall(i,j in I|i<j)   InitSol(x(i,j)):=x_heur(i,j)   
+forall(i in I)     InitSol(y(i)):=y_heur(i)   
+
+loadprob(obj)
+addmipsol("InitSol", InitSol)
+
+initialtime:= gettime
+minimize(obj)
+finaltime:=gettime
+endtime:=gettime
+ip:=getobjval  
+
+
+
+
+end-model
